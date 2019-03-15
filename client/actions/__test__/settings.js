@@ -41,6 +41,8 @@ describe('settings actions', () => {
     it('should dispatch SET_APIKEY and SET_DOMAIN when getting user settings have been done', done => {
       const apikey = '123';
       const customDomain = 'test.com';
+      const homepage = '';
+      const useHttps = false;
 
       nock('http://localhost', {
         reqheaders: {
@@ -48,14 +50,18 @@ describe('settings actions', () => {
         }
       })
         .get('/api/auth/usersettings')
-        .reply(200, { apikey, customDomain });
+        .reply(200, { apikey, customDomain, homepage, useHttps });
 
       const store = mockStore({});
 
       const expectedActions = [
         {
           type: SET_DOMAIN,
-          payload: customDomain
+          payload: {
+            customDomain,
+            homepage: '',
+            useHttps: false,
+          }
         },
         {
           type: SET_APIKEY,
@@ -76,6 +82,8 @@ describe('settings actions', () => {
   describe('#setCustomDomain()', () => {
     it('should dispatch SET_DOMAIN when setting custom domain has been done', done => {
       const customDomain = 'test.com';
+      const homepage = '';
+      const useHttps = false;
 
       nock('http://localhost', {
         reqheaders: {
@@ -83,7 +91,7 @@ describe('settings actions', () => {
         }
       })
         .post('/api/url/customdomain')
-        .reply(200, { customDomain });
+        .reply(200, { customDomain, homepage, useHttps });
 
       const store = mockStore({});
 
@@ -91,12 +99,20 @@ describe('settings actions', () => {
         { type: DOMAIN_LOADING },
         {
           type: SET_DOMAIN,
-          payload: customDomain
+          payload: {
+            customDomain,
+            homepage: '',
+            useHttps: false,
+          }
         }
       ];
 
       store
-        .dispatch(setCustomDomain(customDomain))
+        .dispatch(setCustomDomain({
+          customDomain,
+          homepage: '',
+          useHttps: false,
+        }))
         .then(() => {
           expect(store.getActions()).to.deep.equal(expectedActions);
           done();

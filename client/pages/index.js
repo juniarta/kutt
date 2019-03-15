@@ -1,20 +1,21 @@
 import React, { Component } from 'react';
 import PropTypes from 'prop-types';
-import withRedux from 'next-redux-wrapper';
+import { connect } from 'react-redux';
 import { bindActionCreators } from 'redux';
-import initialState from '../store';
 import BodyWrapper from '../components/BodyWrapper';
 import Shortener from '../components/Shortener';
 import Features from '../components/Features';
+import Extensions from '../components/Extensions';
 import Table from '../components/Table';
 import NeedToLogin from '../components/NeedToLogin';
 import Footer from '../components/Footer/Footer';
 import { authUser, getUrlsList } from '../actions';
 
 class Homepage extends Component {
-  static getInitialProps({ req, store }) {
+  static getInitialProps({ req, reduxStore }) {
     const token = req && req.cookies && req.cookies.token;
-    if (token && store) store.dispatch(authUser(token));
+    if (token && reduxStore) reduxStore.dispatch(authUser(token));
+    return {};
   }
 
   componentDidMount() {
@@ -35,6 +36,7 @@ class Homepage extends Component {
         {needToLogin}
         {table}
         <Features />
+        <Extensions />
         <Footer />
       </BodyWrapper>
     );
@@ -52,4 +54,7 @@ const mapDispatchToProps = dispatch => ({
   getUrlsList: bindActionCreators(getUrlsList, dispatch),
 });
 
-export default withRedux(initialState, mapStateToProps, mapDispatchToProps)(Homepage);
+export default connect(
+  mapStateToProps,
+  mapDispatchToProps
+)(Homepage);

@@ -1,11 +1,9 @@
 import React, { Component } from 'react';
 import PropTypes from 'prop-types';
 import Router from 'next/router';
-import withRedux from 'next-redux-wrapper';
 import styled, { css } from 'styled-components';
 import cookie from 'js-cookie';
 import axios from 'axios';
-import initialState from '../store';
 import BodyWrapper from '../components/BodyWrapper';
 import TextInput from '../components/TextInput';
 import Button from '../components/Button';
@@ -63,7 +61,9 @@ class ResetPassword extends Component {
     if (this.state.loading) return null;
     e.preventDefault();
     const form = document.getElementById('reset-password-form');
-    const { email: { value } } = form.elements;
+    const {
+      email: { value },
+    } = form.elements;
     if (!value) {
       this.setState({ error: 'Please provide an Email address.' }, () => {
         setTimeout(() => {
@@ -109,12 +109,12 @@ class ResetPassword extends Component {
   }
 }
 
-ResetPassword.getInitialProps = ({ store, query }) => {
+ResetPassword.getInitialProps = ({ reduxStore, query }) => {
   if (query && query.token) {
-    store.dispatch(authUser(query.token));
+    reduxStore.dispatch(authUser(query.token));
     return { query };
   }
-  return null;
+  return {};
 };
 
 ResetPassword.propTypes = {
@@ -127,4 +127,4 @@ ResetPassword.defaultProps = {
   query: null,
 };
 
-export default withRedux(initialState)(ResetPassword);
+export default ResetPassword;

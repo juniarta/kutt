@@ -125,7 +125,7 @@ class Login extends Component {
                 onClick={this.loginHandler}
                 big
               >
-                Login
+                Log in
               </Button>
               <Button
                 icon={this.props.loading.signup ? 'loader' : 'signup'}
@@ -168,4 +168,7 @@ const mapDispatchToProps = dispatch => ({
   showPageLoading: bindActionCreators(showPageLoading, dispatch),
 });
 
-export default connect(mapStateToProps, mapDispatchToProps)(Login);
+export default connect(
+  mapStateToProps,
+  mapDispatchToProps
+)(Login);

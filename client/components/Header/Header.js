@@ -30,6 +30,7 @@ const LeftMenuWrapper = styled.div`
 
   @media only screen and (max-width: 488px) {
     flex-direction: column;
+    align-items: flex-start;
   }
 `;
 
@@ -51,4 +52,7 @@ const mapDispatchToProps = dispatch => ({
   showPageLoading: bindActionCreators(showPageLoading, dispatch),
 });
 
-export default connect(null, mapDispatchToProps)(Header);
+export default connect(
+  null,
+  mapDispatchToProps
+)(Header);

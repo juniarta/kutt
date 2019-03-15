@@ -18,6 +18,13 @@ const List = styled.ul`
   list-style: none;
 `;
 
+const ReportLink = styled.a`
+  display: none;
+  @media only screen and (max-width: 488px) {
+    display: block;
+  }
+`;
+
 const HeaderMenu = props => {
   const goTo = e => {
     e.preventDefault();
@@ -37,7 +44,7 @@ const HeaderMenu = props => {
   const logout = props.auth.isAuthenticated && (
     <HeaderMenuItem>
       <a href="/logout" title="logout" onClick={goTo}>
-        Logout
+        Log out
       </a>
     </HeaderMenuItem>
   );
@@ -50,6 +57,11 @@ const HeaderMenu = props => {
   );
   return (
     <List>
+      <HeaderMenuItem>
+        <ReportLink href="/report" title="Report" onClick={goTo}>
+          Report
+        </ReportLink>
+      </HeaderMenuItem>
       {logout}
       {settings}
       {login}
@@ -71,4 +83,7 @@ const mapDispatchToProps = dispatch => ({
   showPageLoading: bindActionCreators(showPageLoading, dispatch),
 });
 
-export default connect(mapStateToProps, mapDispatchToProps)(HeaderMenu);
+export default connect(
+  mapStateToProps,
+  mapDispatchToProps
+)(HeaderMenu);

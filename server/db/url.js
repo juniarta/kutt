@@ -1,22 +1,14 @@
 const bcrypt = require('bcryptjs');
 const _ = require('lodash/');
-const {
-  isAfter,
-  isSameHour,
-  isSameDay,
-  isSameMonth,
-  subDays,
-  subHours,
-  subMonths,
-} = require('date-fns');
+const { isAfter, subDays } = require('date-fns');
 const driver = require('./neo4j');
 const config = require('../config');
-const { generateShortUrl } = require('../utils');
-
-const getUTCDate = (dateString = Date.now()) => {
-  const date = new Date(dateString);
-  return new Date(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), date.getUTCHours());
-};
+const {
+  generateShortUrl,
+  statsObjectToArray,
+  getDifferenceFunction,
+  getUTCDate,
+} = require('../utils');
 
 const queryNewUrl = 'CREATE (l:URL { id: $id, target: $target, createdAt: $createdAt }) RETURN l';
 
@@ -52,7 +44,11 @@ exports.createShortUrl = params =>
           ...data,
           password: !!data.password,
           reuse: !!params.reuse,
-          shortUrl: generateShortUrl(data.id, params.user && params.user.domain),
+          shortUrl: generateShortUrl(
+            data.id,
+            params.user && params.user.domain,
+            params.user && params.user.useHttps
+          ),
         });
       })
       .catch(err => session.close() || reject(err));
@@ -64,8 +60,9 @@ exports.createVisit = params =>
     session
       .writeTransaction(tx =>
         tx.run(
-          'MATCH (l:URL { id: $id })' +
-            `${params.domain ? 'MATCH (l)-[:USES]->({ name: $domain })' : ''}` +
+          'MATCH (l:URL { id: $id }) ' +
+            `${params.domain ? 'MATCH (l)-[:USES]->({ name: $domain })' : ''} ` +
+            'SET l.count = l.count + 1 ' +
             'CREATE (v:VISIT)' +
             'MERGE (b:BROWSER { browser: $browser })' +
             'MERGE (c:COUNTRY { country: $country })' +
@@ -150,21 +147,22 @@ exports.getCountUrls = ({ user }) =>
       .catch(err => session.close() || reject(err));
   });
 
-exports.getUrls = ({ user, options }) =>
+exports.getUrls = ({ user, options, setCount }) =>
   new Promise((resolve, reject) => {
     const session = driver.session();
     const { count = 5, page = 1, search = '' } = options;
     const limit = parseInt(count, 10);
     const skip = parseInt(page, 10);
     const searchQuery = search ? 'WHERE l.id =~ $search OR l.target =~ $search' : '';
+    const setVisitsCount = setCount ? 'SET l.count = size((l)<-[:VISITED]-())' : '';
     session
       .readTransaction(tx =>
         tx.run(
           `MATCH (u:USER { email: $email })-[:CREATED]->(l) ${searchQuery} ` +
             'WITH l ORDER BY l.createdAt DESC ' +
             'WITH l SKIP $skip LIMIT $limit ' +
-            'OPTIONAL MATCH (l)-[:USES]->(d) ' +
-            'RETURN l, d.name AS domain, size((l)<-[:VISITED]-()) as count',
+            `OPTIONAL MATCH (l)-[:USES]->(d) ${setVisitsCount} ` +
+            'RETURN l, d.name AS domain, d.useHttps as useHttps',
           {
             email: user.email,
             limit,
@@ -175,13 +173,19 @@ exports.getUrls = ({ user, options }) =>
       )
       .then(({ records }) => {
         session.close();
-        const urls = records.map(record => ({
-          ...record.get('l').properties,
-          password: !!record.get('l').properties.password,
-          count: record.get('count').toNumber(),
-          shortUrl: `http${!record.get('domain') ? 's' : ''}://${record.get('domain') ||
-            config.DEFAULT_DOMAIN}/${record.get('l').properties.id}`,
-        }));
+        const urls = records.map(record => {
+          const visitCount = record.get('l').properties.count;
+          const domain = record.get('domain');
+          const protocol = record.get('useHttps') || !domain ? 'https://' : 'http://';
+          return {
+            ...record.get('l').properties,
+            count: typeof visitCount === 'object' ? visitCount.toNumber() : visitCount,
+            password: !!record.get('l').properties.password,
+            shortUrl: `${protocol}${domain || config.DEFAULT_DOMAIN}/${
+              record.get('l').properties.id
+            }`,
+          };
+        });
         resolve({ list: urls });
       })
       .catch(err => session.close() || reject(err));
@@ -192,19 +196,27 @@ exports.getCustomDomain = ({ customDomain }) =>
     const session = driver.session();
     session
       .readTransaction(tx =>
-        tx.run('MATCH (d:DOMAIN { name: $customDomain })<-[:OWNS]-(u) RETURN u', {
-          customDomain,
-        })
+        tx.run(
+          'MATCH (d:DOMAIN { name: $customDomain })<-[:OWNS]-(u) RETURN u.email as email, d.homepage as homepage',
+          {
+            customDomain,
+          }
+        )
       )
       .then(({ records }) => {
         session.close();
-        const data = records.length && records[0].get('u').properties;
+        const data = records.length
+          ? {
+              email: records[0].get('email'),
+              homepage: records[0].get('homepage'),
+            }
+          : {};
         resolve(data);
       })
       .catch(err => session.close() || reject(err));
   });
 
-exports.setCustomDomain = ({ user, customDomain }) =>
+exports.setCustomDomain = ({ user, customDomain, homepage, useHttps }) =>
   new Promise((resolve, reject) => {
     const session = driver.session();
     session
@@ -212,11 +224,13 @@ exports.setCustomDomain = ({ user, customDomain }) =>
         tx.run(
           'MATCH (u:USER { email: $email }) ' +
             'OPTIONAL MATCH (u)-[r:OWNS]->() DELETE r ' +
-            'MERGE (d:DOMAIN { name: $customDomain }) ' +
+            `MERGE (d:DOMAIN { name: $customDomain, homepage: $homepage, useHttps: $useHttps }) ` +
             'MERGE (u)-[:OWNS]->(d) RETURN u, d',
           {
             customDomain,
+            homepage: homepage || '',
             email: user.email,
+            useHttps: !!useHttps,
           }
         )
       )
@@ -275,7 +289,10 @@ exports.deleteUrl = ({ id, domain, user }) =>
       .catch(err => session.close() || reject(err));
   });
 
-/* Collecting stats */
+/*
+ ** Collecting stats
+ */
+
 const initialStats = {
   browser: {
     IE: 0,
@@ -300,117 +317,113 @@ const initialStats = {
   dates: [],
 };
 
-const filterByDate = days => record => isAfter(record.date, subDays(getUTCDate(), days));
-
-/* eslint-disable no-param-reassign */
-const calcStats = (obj, record) => {
-  obj.browser[record.browser] += 1;
-  obj.os[record.os] += 1;
-  obj.country[record.country] = obj.country[record.country] + 1 || 1;
-  obj.referrer[record.referrer] = obj.referrer[record.referrer] + 1 || 1;
-  obj.dates = [...obj.dates, record.date];
-  return obj;
-};
-/* eslint-enable no-param-reassign */
-
-const objectToArray = item => {
-  const objToArr = key =>
-    Array.from(Object.keys(item[key]))
-      .map(name => ({
-        name,
-        value: item[key][name],
-      }))
-      .sort((a, b) => b.value - a.value);
-
-  return {
-    browser: objToArr('browser'),
-    os: objToArr('os'),
-    country: objToArr('country'),
-    referrer: objToArr('referrer'),
-  };
-};
-
-const calcViewPerDate = (views, period, sub, compare, lastDate = getUTCDate(), arr = []) => {
-  if (arr.length === period) return arr;
-
-  const matchedStats = views.filter(date => compare(date, lastDate));
-  const viewsPerDate = [matchedStats.length, ...arr];
-
-  return calcViewPerDate(views, period, sub, compare, sub(lastDate, 1), viewsPerDate);
-};
-
-const calcViews = {
-  0: views => calcViewPerDate(views, 24, subHours, isSameHour),
-  1: views => calcViewPerDate(views, 7, subDays, isSameDay),
-  2: views => calcViewPerDate(views, 30, subDays, isSameDay),
-  3: views => calcViewPerDate(views, 18, subMonths, isSameMonth),
-};
-
 exports.getStats = ({ id, domain, user }) =>
   new Promise((resolve, reject) => {
     const session = driver.session();
 
+    const stats = {
+      lastDay: {
+        stats: _.cloneDeep(initialStats),
+        views: new Array(24).fill(0),
+      },
+      lastWeek: {
+        stats: _.cloneDeep(initialStats),
+        views: new Array(7).fill(0),
+      },
+      lastMonth: {
+        stats: _.cloneDeep(initialStats),
+        views: new Array(30).fill(0),
+      },
+      allTime: {
+        stats: _.cloneDeep(initialStats),
+        views: new Array(18).fill(0),
+      },
+    };
+
+    let total = 0;
+
+    const statsPeriods = [[1, 'lastDay'], [7, 'lastWeek'], [30, 'lastMonth']];
+
     session
-      .readTransaction(tx =>
-        tx.run(
-          'MATCH (l:URL { id: $id })<-[:CREATED]-(u:USER { email: $email }) ' +
-            `${domain ? 'MATCH (l)-[:USES]->(domain { name: $domain })' : ''}` +
-            'MATCH (v)-[:VISITED]->(l) ' +
-            'MATCH (v)-[:BROWSED_BY]->(b) ' +
-            'MATCH (v)-[:LOCATED_IN]->(c) ' +
-            'MATCH (v)-[:OS]->(o) ' +
-            'MATCH (v)-[:REFERRED_BY]->(r) ' +
-            'MATCH (v)-[:VISITED_IN]->(d) ' +
-            'RETURN l, b.browser AS browser, c.country AS country,' +
-            `${domain ? 'domain.name AS domain, ' : ''}` +
-            'o.os AS os, r.referrer AS referrer, d.date AS date ' +
-            'ORDER BY d.date DESC',
-          {
-            email: user.email,
-            domain,
-            id,
-          }
-        )
-      )
-      .then(({ records }) => {
-        session.close();
-
-        if (!records.length) resolve([]);
-
-        const allStats = records.map(record => ({
-          browser: record.get('browser'),
-          os: record.get('os'),
-          country: record.get('country'),
-          referrer: record.get('referrer'),
-          date: record.get('date'),
-        }));
-
-        const statsPeriods = [1, 7, 30, 550];
-
-        const stats = statsPeriods
-          .map(statsPeriod => allStats.filter(filterByDate(statsPeriod)))
-          .map(statsPeriod => statsPeriod.reduce(calcStats, _.cloneDeep(initialStats)))
-          .map((statsPeriod, index) => ({
-            stats: objectToArray(statsPeriod),
-            views: calcViews[index](statsPeriod.dates),
-          }));
-
-        const response = {
-          total: records.length,
+      .run(
+        'MATCH (l:URL { id: $id })<-[:CREATED]-(u:USER { email: $email }) ' +
+          `${domain ? 'MATCH (l)-[:USES]->(domain { name: $domain })' : ''}` +
+          'MATCH (v)-[:VISITED]->(l) ' +
+          'MATCH (v)-[:BROWSED_BY]->(b) ' +
+          'MATCH (v)-[:LOCATED_IN]->(c) ' +
+          'MATCH (v)-[:OS]->(o) ' +
+          'MATCH (v)-[:REFERRED_BY]->(r) ' +
+          'MATCH (v)-[:VISITED_IN]->(d) ' +
+          'WITH l, b.browser AS browser, c.country AS country, ' +
+          'o.os AS os, r.referrer AS referrer, d.date AS date ' +
+          'RETURN l, browser, country, os, referrer, date ' +
+          'ORDER BY date DESC',
+        {
+          email: user.email,
+          domain,
           id,
-          shortUrl: `http${!domain ? 's' : ''}://${
-            domain ? records[0].get('domain') : config.DEFAULT_DOMAIN
-          }/${id}`,
-          target: records[0].get('l').properties.target,
-          lastDay: stats[0],
-          lastWeek: stats[1],
-          lastMonth: stats[2],
-          allTime: stats[3],
-        };
+        }
+      )
+      .subscribe({
+        onNext(record) {
+          total += 1;
+          const browser = record.get('browser');
+          const os = record.get('os');
+          const country = record.get('country');
+          const referrer = record.get('referrer');
+          const date = record.get('date');
 
-        return resolve(response);
-      })
-      .catch(err => session.close() || reject(err));
+          statsPeriods.forEach(([days, type]) => {
+            const isIncluded = isAfter(date, subDays(getUTCDate(), days));
+            if (isIncluded) {
+              const period = stats[type].stats;
+              const diffFunction = getDifferenceFunction(type);
+              const now = new Date();
+              const diff = diffFunction(now, date);
+              const index = stats[type].views.length - diff - 1;
+              const view = stats[type].views[index];
+              period.browser[browser] += 1;
+              period.os[os] += 1;
+              period.country[country] = period.country[country] + 1 || 1;
+              period.referrer[referrer] = period.referrer[referrer] + 1 || 1;
+              stats[type].views[index] = view + 1 || 1;
+            }
+          });
+
+          const allTime = stats.allTime.stats;
+          const diffFunction = getDifferenceFunction('allTime');
+          const now = new Date();
+          const diff = diffFunction(now, date);
+          const index = stats.allTime.views.length - diff - 1;
+          const view = stats.allTime.views[index];
+          allTime.browser[browser] += 1;
+          allTime.os[os] += 1;
+          allTime.country[country] = allTime.country[country] + 1 || 1;
+          allTime.referrer[referrer] = allTime.referrer[referrer] + 1 || 1;
+          allTime.dates = [...allTime.dates, date];
+          stats.allTime.views[index] = view + 1 || 1;
+        },
+        onCompleted() {
+          stats.lastDay.stats = statsObjectToArray(stats.lastDay.stats);
+          stats.lastWeek.stats = statsObjectToArray(stats.lastWeek.stats);
+          stats.lastMonth.stats = statsObjectToArray(stats.lastMonth.stats);
+          stats.allTime.stats = statsObjectToArray(stats.allTime.stats);
+          const response = {
+            total,
+            id,
+            updatedAt: new Date().toISOString(),
+            lastDay: stats.lastDay,
+            lastWeek: stats.lastWeek,
+            lastMonth: stats.lastMonth,
+            allTime: stats.allTime,
+          };
+          return resolve(response);
+        },
+        onError(error) {
+          session.close();
+          return reject(error);
+        },
+      });
   });
 
 exports.urlCountFromDate = ({ date, email }) =>
@@ -420,7 +433,7 @@ exports.urlCountFromDate = ({ date, email }) =>
       .readTransaction(tx =>
         tx.run(
           'MATCH (u:USER { email: $email })-[:CREATED]->(l) WHERE l.createdAt > $date ' +
-            'RETURN COUNT(l) as count',
+            'WITH COUNT(l) as count RETURN count',
           {
             date,
             email,

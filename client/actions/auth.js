@@ -33,7 +33,9 @@ export const authRenew = () => ({ type: AUTH_RENEW });
 export const signupUser = payload => async dispatch => {
   dispatch(showSignupLoading());
   try {
-    const { data: { email } } = await axios.post('/api/auth/signup', payload);
+    const {
+      data: { email },
+    } = await axios.post('/api/auth/signup', payload);
     dispatch(sentVerification(email));
   } catch ({ response }) {
     dispatch(showAuthError(response.data.error));
@@ -43,11 +45,13 @@ export const signupUser = payload => async dispatch => {
 export const loginUser = payload => async dispatch => {
   dispatch(showLoginLoading());
   try {
-    const { data: { token } } = await axios.post('/api/auth/login', payload);
+    const {
+      data: { token },
+    } = await axios.post('/api/auth/login', payload);
     cookie.set('token', token, { expires: 7 });
     dispatch(authRenew());
     dispatch(authUser(decodeJwt(token)));
-    dispatch(setDomain(decodeJwt(token).domain));
+    dispatch(setDomain({ customDomain: decodeJwt(token).domain }));
     dispatch(showPageLoading());
     Router.push('/');
   } catch ({ response }) {
@@ -74,11 +78,13 @@ export const renewAuthUser = () => async (dispatch, getState) => {
   };
 
   try {
-    const { data: { token } } = await axios(options);
+    const {
+      data: { token },
+    } = await axios(options);
     cookie.set('token', token, { expires: 7 });
     dispatch(authRenew());
     dispatch(authUser(decodeJwt(token)));
-    dispatch(setDomain(decodeJwt(token).domain));
+    dispatch(setDomain({ customDomain: decodeJwt(token).domain }));
   } catch (error) {
     cookie.remove('token');
     dispatch(unauthUser());

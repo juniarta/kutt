@@ -9,6 +9,11 @@ module.exports = {
   DB_USERNAME: '',
   DB_PASSWORD: '',
 
+  /* Redis host and port */
+  REDIS_HOST: '127.0.0.1',
+  REDIS_PORT: 6379,
+  REDIS_PASSWORD: '',
+
   /* The daily limit for each user */
   USER_LIMIT_PER_DAY: 50,
 
@@ -33,6 +38,12 @@ module.exports = {
   */
   GOOGLE_SAFE_BROWSING_KEY: '',
 
+  /* 
+    Google Analytics tracking ID for universal analytics.
+    Example: UA-XXXX-XX
+  */
+  GOOGLE_ANALYTICS: '',
+
   /*
     Your email host details to use to send verification emails.
     More info on http://nodemailer.com/
@@ -41,5 +52,11 @@ module.exports = {
   MAIL_PORT: 587,
   MAIL_SECURE: false,
   MAIL_USER: '',
+  MAIL_FROM: '', // Example: "Kutt <support@kutt.it>". Leave empty to use MAIL_USER
   MAIL_PASSWORD: '',
+
+  /*
+    The email address that will receive submitted reports.
+  */
+  REPORT_MAIL: '',
 };

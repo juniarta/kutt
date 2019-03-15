@@ -25,7 +25,6 @@ class AppDocument extends Document {
         <Head>
           <meta charSet="utf-8" />
           <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-          <title>Kutt.it | Modern Open Source URL shortener.</title>
           <meta
             name="description"
             content="Kutt.it is a free and open source URL shortener with custom domains and stats."
@@ -39,6 +38,8 @@ class AppDocument extends Document {
           <link rel="icon" sizes="16x16" href="/images/favicon-16x16.png" />
           <link rel="apple-touch-icon" href="/images/favicon-196x196.png" />
           <link rel="mask-icon" href="/images/icon.svg" color="blue" />
+          <link rel="manifest" href="manifest.webmanifest" />
+          <meta name="theme-color" content="#f3f3f3" />
 
           <meta property="fb:app_id" content="123456789" />
           <meta property="og:url" content="https://kutt.it" />
@@ -56,6 +57,18 @@ class AppDocument extends Document {
           <script
             dangerouslySetInnerHTML={{
               __html: `window.recaptchaCallback = function() { window.isCaptchaReady = true; }`,
+            }}
+          />
+
+          <script
+            dangerouslySetInnerHTML={{
+              __html: `
+                if('serviceWorker' in navigator) {
+                  navigator.serviceWorker.register('sw.js', {
+                      scope: './'
+                    })
+                  }
+                `,
             }}
           />
 

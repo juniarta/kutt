@@ -1,12 +1,13 @@
-const urlRegex = require('url-regex');
-const URL = require('url');
-const dns = require('dns');
 const { promisify } = require('util');
+const urlRegex = require('url-regex');
+const dns = require('dns');
+const URL = require('url');
 const generate = require('nanoid/generate');
 const useragent = require('useragent');
 const geoip = require('geoip-lite');
 const bcrypt = require('bcryptjs');
-const subDay = require('date-fns/sub_days');
+const ua = require('universal-analytics');
+const isbot = require('isbot');
 const {
   createShortUrl,
   createVisit,
@@ -18,13 +19,19 @@ const {
   getStats,
   getUrls,
   setCustomDomain,
-  urlCountFromDate,
   banUrl,
-  getBannedDomain,
-  getBannedHost,
 } = require('../db/url');
+const {
+  checkBannedDomain,
+  checkBannedHost,
+  cooldownCheck,
+  malwareCheck,
+  preservedUrls,
+  urlCountsCheck,
+} = require('./validateBodyController');
+const transporter = require('../mail/mail');
 const redis = require('../redis');
-const { addProtocol, generateShortUrl } = require('../utils');
+const { addProtocol, generateShortUrl, getStatsCacheTime } = require('../utils');
 const config = require('../config');
 
 const dnsLookup = promisify(dns.lookup);
@@ -37,75 +44,62 @@ const generateId = async () => {
 };
 
 exports.urlShortener = async ({ body, user }, res) => {
-  // Check if user has passed daily limit
-  if (user) {
-    const { count } = await urlCountFromDate({
-      email: user.email,
-      date: subDay(new Date(), 1).toJSON(),
-    });
-    if (count > config.USER_LIMIT_PER_DAY) {
-      return res.status(429).json({
-        error: `You have reached your daily limit (${config.USER_LIMIT_PER_DAY}). Please wait 24h.`,
-      });
-    }
-  }
+  try {
+    const domain = URL.parse(body.target).hostname;
 
-  // if "reuse" is true, try to return
-  // the existent URL without creating one
-  if (user && body.reuse) {
-    const urls = await findUrl({ target: addProtocol(body.target) });
-    if (urls.length) {
-      urls.sort((a, b) => a.createdAt > b.createdAt);
-      const { domain: d, user: u, ...url } = urls[urls.length - 1];
-      const data = {
-        ...url,
-        password: !!url.password,
-        reuse: true,
-        shortUrl: generateShortUrl(url.id, user.domain),
-      };
-      return res.json(data);
-    }
-  }
+    const queries = await Promise.all([
+      config.GOOGLE_SAFE_BROWSING_KEY && cooldownCheck(user),
+      config.GOOGLE_SAFE_BROWSING_KEY && malwareCheck(user, body.target),
+      user && urlCountsCheck(user.email),
+      user && body.reuse && findUrl({ target: addProtocol(body.target) }),
+      user && body.customurl && findUrl({ id: body.customurl || '' }),
+      (!user || !body.customurl) && generateId(),
+      checkBannedDomain(domain),
+      checkBannedHost(domain),
+    ]);
 
-  // Check if custom URL already exists
-  if (user && body.customurl) {
-    const urls = await findUrl({ id: body.customurl || '' });
-    if (urls.length) {
-      const urlWithNoDomain = !user.domain && urls.some(url => !url.domain);
-      const urlWithDmoain = user.domain && urls.some(url => url.domain === user.domain);
-      if (urlWithNoDomain || urlWithDmoain) {
-        return res.status(400).json({ error: 'Custom URL is already in use.' });
+    // if "reuse" is true, try to return
+    // the existent URL without creating one
+    if (user && body.reuse) {
+      const urls = queries[3];
+      if (urls.length) {
+        urls.sort((a, b) => a.createdAt > b.createdAt);
+        const { domain: d, user: u, ...url } = urls[urls.length - 1];
+        const data = {
+          ...url,
+          password: !!url.password,
+          reuse: true,
+          shortUrl: generateShortUrl(url.id, user.domain, user.useHttps),
+        };
+        return res.json(data);
       }
     }
-  }
 
-  // If domain or host is banned
-  const domain = URL.parse(body.target).hostname;
-  const isDomainBanned = await getBannedDomain(domain);
+    // Check if custom URL already exists
+    if (user && body.customurl) {
+      const urls = queries[4];
+      if (urls.length) {
+        const urlWithNoDomain = !user.domain && urls.some(url => !url.domain);
+        const urlWithDmoain = user.domain && urls.some(url => url.domain === user.domain);
+        if (urlWithNoDomain || urlWithDmoain) {
+          throw new Error('Custom URL is already in use.');
+        }
+      }
+    }
 
-  let isHostBanned;
-  try {
-    const dnsRes = await dnsLookup(domain);
-    isHostBanned = await getBannedHost(dnsRes && dnsRes.address);
+    // Create new URL
+    const id = (user && body.customurl) || queries[5];
+    const target = addProtocol(body.target);
+    const url = await createShortUrl({ ...body, id, target, user });
+
+    return res.json(url);
   } catch (error) {
-    isHostBanned = null;
+    return res.status(400).json({ error: error.message });
   }
-
-  if (isDomainBanned || isHostBanned) {
-    return res.status(400).json({ error: 'URL is containing malware/scam.' });
-  }
-
-  // Create new URL
-  const id = (user && body.customurl) || (await generateId());
-  const target = addProtocol(body.target);
-  const url = await createShortUrl({ ...body, id, target, user });
-
-  return res.json(url);
 };
 
 const browsersList = ['IE', 'Firefox', 'Chrome', 'Opera', 'Safari', 'Edge'];
 const osList = ['Windows', 'Mac Os X', 'Linux', 'Chrome OS', 'Android', 'iOS'];
-const botList = ['bot', 'dataminr', 'pinterest', 'yahoo', 'facebook', 'crawl'];
 const filterInBrowser = agent => item =>
   agent.family.toLowerCase().includes(item.toLocaleLowerCase());
 const filterInOs = agent => item =>
@@ -122,24 +116,30 @@ exports.goToUrl = async (req, res, next) => {
   const referrer = req.header('Referer') && URL.parse(req.header('Referer')).hostname;
   const location = geoip.lookup(req.realIp);
   const country = location && location.country;
-  const isBot =
-    botList.some(bot => agent.source.toLowerCase().includes(bot)) || agent.family === 'Other';
+  const isBot = isbot(req.headers['user-agent']);
 
   let url;
 
-  const cachedUrl = await redis.get(id + domain || '');
+  const cachedUrl = await redis.get(id + (domain || ''));
 
   if (cachedUrl) {
     url = JSON.parse(cachedUrl);
   } else {
     const urls = await findUrl({ id, domain });
-    if (!urls && !urls.length) return next();
-    url = urls.find(item => (domain ? item.domain === domain : !item.domain));
+    url =
+      urls && urls.length && urls.find(item => (domain ? item.domain === domain : !item.domain));
   }
 
-  if (!url) return next();
+  if (!url) {
+    if (host !== config.DEFAULT_DOMAIN) {
+      const { homepage } = await getCustomDomain({ customDomain: domain });
+      if (!homepage) return next();
+      return res.redirect(301, homepage);
+    }
+    return next();
+  }
 
-  redis.set(id + domain || '', JSON.stringify(url), 'EX', 60 * 60 * 1);
+  redis.set(id + (domain || ''), JSON.stringify(url), 'EX', 60 * 60 * 1);
 
   if (url.banned) {
     return res.redirect('/banned');
@@ -184,32 +184,66 @@ exports.goToUrl = async (req, res, next) => {
       referrer: referrer || 'Direct',
     });
   }
+
+  if (config.GOOGLE_ANALYTICS && !isBot) {
+    const visitor = ua(config.GOOGLE_ANALYTICS);
+    visitor
+      .pageview({
+        dp: `/${id}`,
+        ua: req.headers['user-agent'],
+        uip: req.realIp,
+        aip: 1,
+      })
+      .send();
+  }
+
   return res.redirect(url.target);
 };
 
 exports.getUrls = async ({ query, user }, res) => {
   const { countAll } = await getCountUrls({ user });
   const urlsList = await getUrls({ options: query, user });
-  return res.json({ ...urlsList, countAll });
+  const isCountMissing = urlsList.list.some(url => typeof url.count === 'undefined');
+  const { list } = isCountMissing
+    ? await getUrls({ options: query, user, setCount: true })
+    : urlsList;
+  return res.json({ list, countAll });
 };
 
-exports.setCustomDomain = async ({ body: { customDomain }, user }, res) => {
+exports.setCustomDomain = async ({ body, user }, res) => {
+  const parsed = URL.parse(body.customDomain);
+  const customDomain = parsed.hostname || parsed.href;
+  if (!customDomain) return res.status(400).json({ error: 'Domain is not valid.' });
   if (customDomain.length > 40) {
     return res.status(400).json({ error: 'Maximum custom domain length is 40.' });
   }
   if (customDomain === config.DEFAULT_DOMAIN) {
     return res.status(400).json({ error: "You can't use default domain." });
   }
-  const isValidDomain = urlRegex({ exact: true, strict: false }).test(customDomain);
-  if (!isValidDomain) return res.status(400).json({ error: 'Domain is not valid.' });
-  const isOwned = await getCustomDomain({ customDomain });
-  if (isOwned && isOwned.email !== user.email) {
+  const isValidHomepage =
+    !body.homepage || urlRegex({ exact: true, strict: false }).test(body.homepage);
+  if (!isValidHomepage) return res.status(400).json({ error: 'Homepage is not valid.' });
+  const homepage =
+    body.homepage &&
+    (URL.parse(body.homepage).protocol ? body.homepage : `http://${body.homepage}`);
+  const { email } = await getCustomDomain({ customDomain });
+  if (email && email !== user.email) {
     return res
       .status(400)
       .json({ error: 'Domain is already taken. Contact us for multiple users.' });
   }
-  const userCustomDomain = await setCustomDomain({ user, customDomain });
-  if (userCustomDomain) return res.status(201).json({ customDomain: userCustomDomain.name });
+  const userCustomDomain = await setCustomDomain({
+    user,
+    customDomain,
+    homepage,
+    useHttps: body.useHttps,
+  });
+  if (userCustomDomain)
+    return res.status(201).json({
+      customDomain: userCustomDomain.name,
+      homepage: userCustomDomain.homepage,
+      useHttps: userCustomDomain.useHttps,
+    });
   return res.status(400).json({ error: "Couldn't set custom domain." });
 };
 
@@ -219,12 +253,25 @@ exports.deleteCustomDomain = async ({ user }, res) => {
   return res.status(400).json({ error: "Couldn't delete custom domain." });
 };
 
+exports.customDomainRedirection = async (req, res, next) => {
+  const { headers, path } = req;
+  if (
+    headers.host !== config.DEFAULT_DOMAIN &&
+    (path === '/' ||
+      preservedUrls.filter(u => u !== 'url-password').some(item => item === path.replace('/', '')))
+  ) {
+    const { homepage } = await getCustomDomain({ customDomain: headers.host });
+    return res.redirect(301, homepage || `https://${config.DEFAULT_DOMAIN + path}`);
+  }
+  return next();
+};
+
 exports.deleteUrl = async ({ body: { id, domain }, user }, res) => {
   if (!id) return res.status(400).json({ error: 'No id has been provided.' });
   const customDomain = domain !== config.DEFAULT_DOMAIN && domain;
   const urls = await findUrl({ id, domain: customDomain });
   if (!urls && !urls.length) return res.status(400).json({ error: "Couldn't find the short URL." });
-  redis.del(id + customDomain || '');
+  redis.del(id + (customDomain || ''));
   const response = await deleteUrl({ id, domain: customDomain, user });
   if (response) return res.status(200).json({ message: 'Sort URL deleted successfully' });
   return res.status(400).json({ error: "Couldn't delete short URL." });
@@ -233,9 +280,40 @@ exports.deleteUrl = async ({ body: { id, domain }, user }, res) => {
 exports.getStats = async ({ query: { id, domain }, user }, res) => {
   if (!id) return res.status(400).json({ error: 'No id has been provided.' });
   const customDomain = domain !== config.DEFAULT_DOMAIN && domain;
+  const redisKey = id + (customDomain || '') + user.email;
+  const cached = await redis.get(redisKey);
+  if (cached) return res.status(200).json(JSON.parse(cached));
+  const urls = await findUrl({ id, domain: customDomain });
+  if (!urls && !urls.length) return res.status(400).json({ error: "Couldn't find the short URL." });
+  const [url] = urls;
   const stats = await getStats({ id, domain: customDomain, user });
   if (!stats) return res.status(400).json({ error: 'Could not get the short URL stats.' });
+  stats.shortUrl = `http${!domain ? 's' : ''}://${domain ? url.domain : config.DEFAULT_DOMAIN}/${
+    url.id
+  }`;
+  stats.target = url.target;
+  const cacheTime = getStatsCacheTime(stats.total);
+  redis.set(redisKey, JSON.stringify(stats), 'EX', cacheTime);
   return res.status(200).json(stats);
+};
+
+exports.reportUrl = async ({ body: { url } }, res) => {
+  if (!url) return res.status(400).json({ error: 'No URL has been provided.' });
+
+  const isValidUrl = urlRegex({ exact: true, strict: false }).test(url);
+  if (!isValidUrl) return res.status(400).json({ error: 'URL is not valid.' });
+
+  const mail = await transporter.sendMail({
+    from: config.MAIL_USER,
+    to: config.REPORT_MAIL,
+    subject: '[REPORT]',
+    text: url,
+    html: url,
+  });
+  if (mail.accepted.length) {
+    return res.status(200).json({ message: "Thanks for the report, we'll take actions shortly." });
+  }
+  return res.status(400).json({ error: "Couldn't submit the report. Try again later." });
 };
 
 exports.ban = async ({ body }, res) => {

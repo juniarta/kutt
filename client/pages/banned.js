@@ -1,8 +1,6 @@
 import React, { Component } from 'react';
 import Link from 'next/link';
 import styled from 'styled-components';
-import withRedux from 'next-redux-wrapper';
-import initialState from '../store';
 import BodyWrapper from '../components/BodyWrapper';
 import Footer from '../components/Footer';
 import { authUser } from '../actions';
@@ -41,9 +39,9 @@ const Subtitle = styled.h3`
 `;
 
 class BannedPage extends Component {
-  static getInitialProps({ req, store }) {
+  static getInitialProps({ req, reduxStore }) {
     const token = req && req.cookies && req.cookies.token;
-    if (token && store) store.dispatch(authUser(token));
+    if (token && reduxStore) reduxStore.dispatch(authUser(token));
     return {};
   }
 
@@ -60,7 +58,8 @@ class BannedPage extends Component {
               <a href="/report" title="Send report">
                 send us a report
               </a>
-            </Link>.
+            </Link>
+            .
           </Subtitle>
         </Wrapper>
         <Footer />
@@ -69,4 +68,4 @@ class BannedPage extends Component {
   }
 }
 
-export default withRedux(initialState)(BannedPage);
+export default BannedPage;

@@ -49,7 +49,11 @@ const authenticate = (type, error, isStrict = true) =>
       if (err) return res.status(400);
       if (!user && isStrict) return res.status(401).json({ error });
       if (user && isStrict && !user.verified) {
-        return res.status(400).json({ error: 'Your email address is not verified.' });
+        return res.status(400).json({
+          error:
+            'Your email address is not verified.' +
+            'Click on signup to get the verification link again.',
+        });
       }
       if (user && user.banned) {
         return res.status(400).json({ error: 'Your are banned from using this website.' });
@@ -111,11 +115,11 @@ exports.signup = async (req, res) => {
   if (user && user.verified) return res.status(403).json({ error: 'Email is already in use.' });
   const newUser = await createUser({ email, password });
   const mail = await transporter.sendMail({
-    from: config.MAIL_USER,
+    from: config.MAIL_FROM || config.MAIL_USER,
     to: newUser.email,
     subject: 'Verify your account',
-    text: verifyMailText.replace('{{verification}}', newUser.verificationToken),
-    html: verifyEmailTemplate.replace('{{verification}}', newUser.verificationToken),
+    text: verifyMailText.replace(/{{verification}}/gim, newUser.verificationToken),
+    html: verifyEmailTemplate.replace(/{{verification}}/gim, newUser.verificationToken),
   });
   if (mail.accepted.length) {
     return res.status(201).json({ email, message: 'Verification email has been sent.' });
@@ -166,7 +170,12 @@ exports.generateApiKey = async ({ user }, res) => {
 };
 
 exports.userSettings = ({ user }, res) =>
-  res.status(200).json({ apikey: user.apikey || '', customDomain: user.domain || '' });
+  res.status(200).json({
+    apikey: user.apikey || '',
+    customDomain: user.domain || '',
+    homepage: user.homepage || '',
+    useHttps: user.useHttps || false,
+  });
 
 exports.requestPasswordReset = async ({ body: { email } }, res) => {
   const user = await requestPasswordReset({ email });

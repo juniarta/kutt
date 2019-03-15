@@ -78,6 +78,8 @@ class Settings extends Component {
       showModal: false,
       passwordMessage: '',
       passwordError: '',
+      useHttps: null,
+      isCopied: false,
       ban: {
         domain: false,
         error: '',
@@ -90,8 +92,10 @@ class Settings extends Component {
     this.onSubmitBan = this.onSubmitBan.bind(this);
     this.onChangeBanCheckboxes = this.onChangeBanCheckboxes.bind(this);
     this.handleCustomDomain = this.handleCustomDomain.bind(this);
+    this.handleCheckbox = this.handleCheckbox.bind(this);
     this.deleteDomain = this.deleteDomain.bind(this);
     this.showModal = this.showModal.bind(this);
+    this.onCopy = this.onCopy.bind(this);
     this.closeModal = this.closeModal.bind(this);
     this.changePassword = this.changePassword.bind(this);
   }
@@ -103,7 +107,9 @@ class Settings extends Component {
 
   async onSubmitBan(e) {
     e.preventDefault();
-    const { ban: { domain, host, user } } = this.state;
+    const {
+      ban: { domain, host, user },
+    } = this.state;
     this.setState(state => ({
       ban: {
         ...state.ban,
@@ -147,6 +153,13 @@ class Settings extends Component {
     );
   }
 
+  onCopy() {
+    this.setState({ isCopied: true });
+    setTimeout(() => {
+      this.setState({ isCopied: false });
+    }, 1500);
+  }
+
   onChangeBanCheckboxes(type) {
     return e => {
       const { checked } = e.target;
@@ -162,8 +175,14 @@ class Settings extends Component {
   handleCustomDomain(e) {
     e.preventDefault();
     if (this.props.domainLoading) return null;
+    const { useHttps } = this.state;
     const customDomain = e.currentTarget.elements.customdomain.value;
-    return this.props.setCustomDomain({ customDomain });
+    const homepage = e.currentTarget.elements.homepage.value;
+    return this.props.setCustomDomain({ customDomain, homepage, useHttps });
+  }
+
+  handleCheckbox({ target: { id, checked } }) {
+    this.setState({ [id]: !checked });
   }
 
   deleteDomain() {
@@ -218,7 +237,9 @@ class Settings extends Component {
   }
 
   render() {
-    const { auth: { user, admin } } = this.props;
+    const {
+      auth: { user, admin },
+    } = this.props;
     return (
       <Wrapper>
         <SettingsWelcome user={user} />
@@ -235,6 +256,8 @@ class Settings extends Component {
         )}
         <SettingsDomain
           handleCustomDomain={this.handleCustomDomain}
+          handleCheckbox={this.handleCheckbox}
+          useHttps={this.state.useHttps}
           loading={this.props.domainLoading}
           settings={this.props.settings}
           showDomainInput={this.props.showDomainInput}
@@ -251,6 +274,8 @@ class Settings extends Component {
           loader={this.props.apiLoading}
           generateKey={this.props.generateApiKey}
           apikey={this.props.settings.apikey}
+          isCopied={this.state.isCopied}
+          onCopy={this.onCopy}
         />
         <Modal show={this.state.showModal} close={this.closeModal} handler={this.deleteDomain}>
           Are you sure do you want to delete the domain?
@@ -306,4 +331,7 @@ const mapDispatchToProps = dispatch => ({
   showDomainInput: bindActionCreators(showDomainInput, dispatch),
 });
 
-export default connect(mapStateToProps, mapDispatchToProps)(Settings);
+export default connect(
+  mapStateToProps,
+  mapDispatchToProps
+)(Settings);

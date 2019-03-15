@@ -15,7 +15,9 @@ describe('settings reducer', () => {
   const initialState = {
     apikey: '',
     customDomain: '',
-    domainInput: true
+    homepage: '',
+    domainInput: true,
+    useHttps: false,
   };
 
   beforeEach(() => {
@@ -27,15 +29,16 @@ describe('settings reducer', () => {
   });
 
   it('should handle SET_DOMAIN', () => {
-    const domain = 'example.com';
+    const customDomain = 'example.com';
+    const homepage = '';
 
     const state = reducer(initialState, {
       type: SET_DOMAIN,
-      payload: domain
+      payload: { customDomain, homepage }
     });
 
     expect(state).not.to.be.undefined;
-    expect(state.customDomain).to.be.equal(domain);
+    expect(state.customDomain).to.be.equal(customDomain);
     expect(state.domainInput).to.be.false;
   });
 
